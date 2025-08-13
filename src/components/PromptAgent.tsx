@@ -58,10 +58,7 @@ async function fetchJSON(input: RequestInfo | URL, init?: RequestInit) {
   const t = await r.text();
   if (!r.ok)
     throw new Error(
-      `HTTP ${r.status}${r.statusText ? " " + r.statusText : ""}: ${t.slice(
-        0,
-        200
-      )}`
+      `HTTP ${r.status}${r.statusText ? " " + r.statusText : ""}: ${t.slice(0, 200)}`
     );
   try {
     return JSON.parse(t);
@@ -73,8 +70,7 @@ async function compressImage(
   file: File,
   o: { maxDim?: number; quality?: number; targetMaxBytes?: number } = {}
 ) {
-  const { maxDim = 1600, quality = 0.85, targetMaxBytes = 3.5 * 1024 * 1024 } =
-    o;
+  const { maxDim = 1600, quality = 0.85, targetMaxBytes = 3.5 * 1024 * 1024 } = o;
   if (file.size <= targetMaxBytes) return file;
   const bmp = await createImageBitmap(file);
   const s = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
@@ -86,11 +82,9 @@ async function compressImage(
   const blob: Blob = await new Promise((res) =>
     c.toBlob((b) => res(b as Blob), "image/webp", quality)
   );
-  return new File(
-    [blob],
-    (file.name.replace(/\.\w+$/, "") || "image") + ".webp",
-    { type: "image/webp" }
-  );
+  return new File([blob], (file.name.replace(/\.\w+$/, "") || "image") + ".webp", {
+    type: "image/webp",
+  });
 }
 
 /** Minimal client untuk menunggu konfirmasi tx */
@@ -100,6 +94,27 @@ type TxClient = {
 };
 
 type Msg = { role: "you" | "agent"; text: string; ts: number };
+
+/* ---------- helpers tambahan (SPG & error) ---------- */
+const PLACEHOLDER_SPG =
+  "0xc32A8a0FF3beDDDa58393d022aF433e78739FAbc".toLowerCase();
+
+function isHexAddress(a?: string): a is `0x${string}` {
+  return !!a && /^0x[0-9a-fA-F]{40}$/.test(a);
+}
+function isValidSpgAddress(a?: string): a is `0x${string}` {
+  return !!a && isHexAddress(a) && a.toLowerCase() !== PLACEHOLDER_SPG;
+}
+function prettyErr(e: any): string {
+  const msgs: string[] = [];
+  if (e?.shortMessage) msgs.push(e.shortMessage);
+  if (e?.cause?.shortMessage) msgs.push(e.cause.shortMessage);
+  if (e?.message) msgs.push(e.message);
+  const joined = msgs.join(" | ");
+  if (/Transaction failed|revert/i.test(joined))
+    return `${joined} — kemungkinan alamat SPG collection tidak valid/izin mint tidak sesuai. Pastikan NEXT_PUBLIC_SPG_COLLECTION adalah koleksi SPG milikmu di Aeneid (1315).`;
+  return joined || String(e);
+}
 
 export default function PromptAgent() {
   const { isConnected, address } = useAccount();
@@ -123,7 +138,6 @@ export default function PromptAgent() {
   useEffect(() => {
     if (!storyWaitRef.current && storyRpcUrl) {
       storyWaitRef.current = createPublicClient({
-        // chain custom, longgar untuk runtime
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         chain: storyAeneid as any,
         transport: http(storyRpcUrl),
@@ -131,7 +145,7 @@ export default function PromptAgent() {
     }
   }, [storyRpcUrl]);
 
-  // SELALU sediakan client on-demand (tanpa menunggu useEffect)
+  // Client on-demand (tanpa menunggu useEffect)
   function getTxClient(): TxClient {
     if (storyWaitRef.current) return storyWaitRef.current;
     storyWaitRef.current = createPublicClient({
@@ -190,15 +204,18 @@ export default function PromptAgent() {
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }
-  async function ensureAeneid() {
-    if (chainId !== 1315) {
-      try {
-        await switchChainAsync({ chainId: 1315 });
-      } catch {
-        /* user cancel ok */
-      }
+
+  /** Switch ke Aeneid (1315). Return true jika sudah di Aeneid atau switch sukses. */
+  async function ensureAeneid(): Promise<boolean> {
+    if (chainId === 1315) return true;
+    try {
+      await switchChainAsync({ chainId: 1315 });
+      return true;
+    } catch {
+      return false; // user cancel / gagal
     }
   }
+
   function newChat() {
     setMessages([]);
     setPlan(null);
@@ -276,21 +293,21 @@ export default function PromptAgent() {
   }
 
   async function awaitConfirmOnStory(hash: Hex): Promise<boolean> {
-    // Prefer wagmi public client kalau ada, kalau tidak buat viem client sendiri
     const pc: TxClient = (storyPc as TxClient) ?? getTxClient();
 
-    // Coba tunggu 1 konfirmasi dulu
     try {
-      const r: any = await pc.waitForTransactionReceipt({ hash, confirmations: 1 });
+      const r: any = await pc.waitForTransactionReceipt({
+        hash,
+        confirmations: 1,
+      });
       const st = r?.status;
       if (st === "success" || st === 1 || st === "0x1" || st === true) return true;
       if (r?.blockNumber != null && st !== "reverted") return true;
     } catch {
-      // lanjut ke polling
+      /* lanjut polling */
     }
 
-    // Fallback polling (maks 3 menit)
-    const deadline = Date.now() + 180_000;
+    const deadline = Date.now() + 180_000; // 3 menit
     while (Date.now() < deadline) {
       try {
         const rcpt: any = await pc.getTransactionReceipt({ hash });
@@ -339,7 +356,7 @@ Tx: ${tx.hash}
         setToast("Swap success ✅");
         clearPlan();
       } catch (e: any) {
-        push("agent", `Swap error: ${e?.message || String(e)}`);
+        push("agent", `Swap error: ${prettyErr(e)}`);
         setToast("Swap error ❌");
       }
       return;
@@ -352,12 +369,21 @@ Tx: ${tx.hash}
           setToast("Attach image dulu 📎");
           return;
         }
-        await ensureAeneid();
 
-        // Pastikan env di-set untuk menghindari revert “Transaction failed”
-        const spgAddr = process.env.NEXT_PUBLIC_SPG_COLLECTION as `0x${string}` | undefined;
-        if (!spgAddr) {
-          push("agent", "❗ NEXT_PUBLIC_SPG_COLLECTION belum di-set. Set alamat koleksi SPG kamu di Aeneid (1315).");
+        // Env SPG + narrowing tipe
+        const envSpg = process.env.NEXT_PUBLIC_SPG_COLLECTION;
+        if (!isValidSpgAddress(envSpg)) {
+          push(
+            "agent",
+            "❗ NEXT_PUBLIC_SPG_COLLECTION belum di-set / masih placeholder. Set alamat koleksi SPG kamu di Aeneid (1315) lalu coba lagi."
+          );
+          return;
+        }
+        const spgAddr: `0x${string}` = envSpg;
+
+        // Pastikan chain
+        if (!(await ensureAeneid())) {
+          push("agent", "❗ Gagal switch ke Aeneid (1315). Transaksi dibatalkan.");
           return;
         }
 
@@ -456,10 +482,12 @@ NFT Metadata: ${toHttps(nftMetaCid)}
           setToast("IP registered ✅");
           clearPlan();
         } else {
-          showStatus("Tx masih pending di jaringan. Pantau link explorer di atas.");
+          showStatus(
+            "Tx masih pending di jaringan. Pantau link explorer di atas."
+          );
         }
       } catch (e: any) {
-        push("agent", `Register error: ${e?.message || String(e)}`);
+        push("agent", `Register error: ${prettyErr(e)}`);
         setToast("Register error ❌");
       }
     }
@@ -513,14 +541,19 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                   AI replies will appear here. Try:{" "}
                   <span className="badge">Swap 1 WIP &gt; USDC slippage 0.5%</span>{" "}
                   or{" "}
-                  <span className="badge">Register this image IP, title "Sunset" by-nc</span>.
+                  <span className="badge">
+                    Register this image IP, title "Sunset" by-nc
+                  </span>
+                  .
                 </div>
               ) : (
                 <div className="space-y-3">
                   {messages.map((m, i) => (
                     <div
                       key={i}
-                      className={`flex ${m.role === "you" ? "justify-end" : "justify-start"}`}
+                      className={`flex ${
+                        m.role === "you" ? "justify-end" : "justify-start"
+                      }`}
                     >
                       <div
                         className={`max-w-[75%] rounded-2xl px-4 py-3 border ${
@@ -543,7 +576,9 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-sm opacity-70 mb-2">Plan</div>
                   <ol className="list-decimal pl-5 space-y-1 text-sm">
-                    {plan.map((p: string, i: number) => <li key={i}>{p}</li>)}
+                    {plan.map((p: string, i: number) => (
+                      <li key={i}>{p}</li>
+                    ))}
                   </ol>
                   <div className="flex gap-2 mt-3">
                     <button

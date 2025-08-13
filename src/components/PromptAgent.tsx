@@ -99,12 +99,18 @@ type Msg = { role: "you" | "agent"; text: string; ts: number };
 const PLACEHOLDER_SPG =
   "0xc32A8a0FF3beDDDa58393d022aF433e78739FAbc".toLowerCase();
 
-function isHexAddress(a?: string): a is `0x${string}` {
-  return !!a && /^0x[0-9a-fA-F]{40}$/.test(a);
+function isHexAddress(a: string): a is `0x${string}` {
+  return /^0x[0-9a-fA-F]{40}$/.test(a);
 }
-function isValidSpgAddress(a?: string): a is `0x${string}` {
-  return !!a && isHexAddress(a) && a.toLowerCase() !== PLACEHOLDER_SPG;
+
+/** Ambil SPG dari env secara aman: trim + validasi + bukan placeholder. */
+function getEnvSpg(): `0x${string}` | null {
+  const raw = (process.env.NEXT_PUBLIC_SPG_COLLECTION ?? "").trim();
+  if (!isHexAddress(raw)) return null;
+  if (raw.toLowerCase() === PLACEHOLDER_SPG) return null;
+  return raw as `0x${string}`;
 }
+
 function prettyErr(e: any): string {
   const msgs: string[] = [];
   if (e?.shortMessage) msgs.push(e.shortMessage);
@@ -370,16 +376,18 @@ Tx: ${tx.hash}
           return;
         }
 
-        // Env SPG + narrowing tipe
-        const envSpg = process.env.NEXT_PUBLIC_SPG_COLLECTION;
-        if (!isValidSpgAddress(envSpg)) {
+        // Env SPG (trim + validasi + bukan placeholder)
+        const spgAddr = getEnvSpg();
+        if (!spgAddr) {
           push(
             "agent",
-            "❗ NEXT_PUBLIC_SPG_COLLECTION belum di-set / masih placeholder. Set alamat koleksi SPG kamu di Aeneid (1315) lalu coba lagi."
+            "❗ NEXT_PUBLIC_SPG_COLLECTION belum valid / masih placeholder. " +
+              "Set alamat koleksi SPG kamu di Aeneid (1315) di .env.local lalu restart dev server."
           );
           return;
         }
-        const spgAddr: `0x${string}` = envSpg;
+        // Info ke user alamat yang dipakai (untuk verifikasi cepat)
+        push("agent", `Using SPG collection: ${spgAddr}`);
 
         // Pastikan chain
         if (!(await ensureAeneid())) {
@@ -482,9 +490,7 @@ NFT Metadata: ${toHttps(nftMetaCid)}
           setToast("IP registered ✅");
           clearPlan();
         } else {
-          showStatus(
-            "Tx masih pending di jaringan. Pantau link explorer di atas."
-          );
+          showStatus("Tx masih pending di jaringan. Pantau link explorer di atas.");
         }
       } catch (e: any) {
         push("agent", `Register error: ${prettyErr(e)}`);
@@ -541,19 +547,14 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                   AI replies will appear here. Try:{" "}
                   <span className="badge">Swap 1 WIP &gt; USDC slippage 0.5%</span>{" "}
                   or{" "}
-                  <span className="badge">
-                    Register this image IP, title "Sunset" by-nc
-                  </span>
-                  .
+                  <span className="badge">Register this image IP, title "Sunset" by-nc</span>.
                 </div>
               ) : (
                 <div className="space-y-3">
                   {messages.map((m, i) => (
                     <div
                       key={i}
-                      className={`flex ${
-                        m.role === "you" ? "justify-end" : "justify-start"
-                      }`}
+                      className={`flex ${m.role === "you" ? "justify-end" : "justify-start"}`}
                     >
                       <div
                         className={`max-w-[75%] rounded-2xl px-4 py-3 border ${
@@ -576,9 +577,7 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-sm opacity-70 mb-2">Plan</div>
                   <ol className="list-decimal pl-5 space-y-1 text-sm">
-                    {plan.map((p: string, i: number) => (
-                      <li key={i}>{p}</li>
-                    ))}
+                    {plan.map((p: string, i: number) => <li key={i}>{p}</li>)}
                   </ol>
                   <div className="flex gap-2 mt-3">
                     <button

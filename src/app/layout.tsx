@@ -15,14 +15,24 @@ export const metadata: Metadata = {
   other: { "color-scheme": "light dark" },
 };
 
-// Inline script untuk set class "dark" SEBELUM hydrate (anti kedip)
+// Pasang kelas 'dark' SEBELUM paint (anti kedip)
 function ThemeScript() {
   return (
     <script
+      // language=JavaScript
       dangerouslySetInnerHTML={{
-        __html: `(()=>{try{var t=localStorage.getItem("theme");
-var d=t?t==="dark":window.matchMedia("(prefers-color-scheme: dark)").matches;
-document.documentElement.classList.toggle("dark",d)}catch(e){}})();`,
+        __html: `
+(function () {
+  try {
+    var saved = localStorage.getItem('theme');
+    var mode = saved ? saved : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    var el = document.documentElement;
+    el.classList.remove('light','dark');
+    el.classList.add(mode);
+    // agar scrollbar & form controls ikut
+    el.style.colorScheme = mode;
+  } catch (e) {}
+})();`,
       }}
     />
   );
@@ -31,8 +41,10 @@ document.documentElement.classList.toggle("dark",d)}catch(e){}})();`,
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="min-h-dvh">
+      <head>
         <ThemeScript />
+      </head>
+      <body className="min-h-dvh bg-slate-50 text-slate-900 dark:bg-[#0b0f1a] dark:text-slate-100">
         <Providers>
           <div className="relative min-h-dvh">
             {/* === FULL-SCREEN BACKGROUND === */}

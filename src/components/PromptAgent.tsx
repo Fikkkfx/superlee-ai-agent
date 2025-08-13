@@ -2,7 +2,12 @@
 
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
-import { useAccount, useChainId, useSwitchChain, usePublicClient } from "wagmi";
+import {
+  useAccount,
+  useChainId,
+  useSwitchChain,
+  usePublicClient,
+} from "wagmi";
 import { decide } from "@/lib/agent/engine";
 import {
   getDecimals,
@@ -13,7 +18,14 @@ import {
 import { useStoryClient } from "@/lib/storyClient";
 import { storyAeneid } from "@/lib/chains/story";
 import { Paperclip, Check, X, Send } from "lucide-react";
-import { parseUnits, toHex, keccak256, type Hex } from "viem";
+import {
+  parseUnits,
+  toHex,
+  keccak256,
+  type Hex,
+  createPublicClient,
+  http,
+} from "viem";
 
 /* ---------- utils (hash, ipfs, fetch) ---------- */
 function bytesKeccak(data: Uint8Array): `0x${string}` {
@@ -39,7 +51,7 @@ function toHttps(cidOrUrl?: string) {
 }
 function toIpfsUri(cidOrUrl?: string) {
   const cid = extractCid(cidOrUrl);
-  return (`ipfs://${cid}`) as const;
+  return `ipfs://${cid}` as const;
 }
 async function fetchJSON(input: RequestInfo | URL, init?: RequestInit) {
   const r = await fetch(input, init);
@@ -81,14 +93,55 @@ async function compressImage(
   );
 }
 
+/** Minimal client untuk menunggu konfirmasi tx */
+type TxClient = {
+  waitForTransactionReceipt: (args: { hash: Hex; confirmations?: number }) => Promise<any>;
+  getTransactionReceipt: (args: { hash: Hex }) => Promise<any>;
+};
+
 type Msg = { role: "you" | "agent"; text: string; ts: number };
 
 export default function PromptAgent() {
   const { isConnected, address } = useAccount();
   const { getClient } = useStoryClient();
+
   const chainId = useChainId();
   const { switchChainAsync } = useSwitchChain();
-  const pc = usePublicClient();
+
+  // Wagmi public client (bisa null saat SSR) -> cast longgar ke TxClient
+  const wagmiPc = usePublicClient({ chainId: 1315 });
+  const storyPc = (wagmiPc as unknown as TxClient) ?? null;
+
+  // Ambil RPC URL dengan fallback aman (public -> default)
+  const rpcUrlsAny = storyAeneid.rpcUrls as any;
+  const storyRpcUrl: string =
+    (rpcUrlsAny.public?.http?.[0] as string | undefined) ??
+    (rpcUrlsAny.default?.http?.[0] as string);
+
+  // Fallback viem client murni untuk tunggu receipt
+  const storyWaitRef = useRef<TxClient | null>(null);
+  useEffect(() => {
+    if (!storyWaitRef.current && storyRpcUrl) {
+      storyWaitRef.current = createPublicClient({
+        // chain custom, longgar untuk runtime
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        chain: storyAeneid as any,
+        transport: http(storyRpcUrl),
+      }) as unknown as TxClient;
+    }
+  }, [storyRpcUrl]);
+
+  // SELALU sediakan client on-demand (tanpa menunggu useEffect)
+  function getTxClient(): TxClient {
+    if (storyWaitRef.current) return storyWaitRef.current;
+    storyWaitRef.current = createPublicClient({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      chain: storyAeneid as any,
+      transport: http(storyRpcUrl),
+      pollingInterval: 1500,
+    }) as unknown as TxClient;
+    return storyWaitRef.current;
+  }
 
   const [prompt, setPrompt] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -99,7 +152,7 @@ export default function PromptAgent() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [plan, setPlan] = useState<string[] | null>(null);
   const [intent, setIntent] = useState<any>(null);
-  const [status, setStatus] = useState<string>("");
+  const [status, setStatus] = useState<string>(""); // internal
   const [toast, setToast] = useState<string | null>(null);
 
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -110,7 +163,6 @@ export default function PromptAgent() {
   function push(role: Msg["role"], text: string) {
     setMessages((m) => [...m, { role, text, ts: Date.now() }]);
   }
-  /** tampilkan status di bar & masukkan ke chat agar jelas terlihat */
   function showStatus(s: string) {
     setStatus(s);
     push("agent", `ℹ️ ${s}`);
@@ -142,7 +194,9 @@ export default function PromptAgent() {
     if (chainId !== 1315) {
       try {
         await switchChainAsync({ chainId: 1315 });
-      } catch {}
+      } catch {
+        /* user cancel ok */
+      }
     }
   }
   function newChat() {
@@ -195,8 +249,14 @@ export default function PromptAgent() {
   function onRun() {
     const p = prompt.trim();
     if (!p) return;
+
     push("you", p);
     setStatus("");
+
+    // clear textarea segera
+    setPrompt("");
+    if (taRef.current) taRef.current.style.height = "40px";
+
     const d = decide(p);
     if (d.type === "ask") {
       setPlan(null);
@@ -215,8 +275,39 @@ export default function PromptAgent() {
     );
   }
 
+  async function awaitConfirmOnStory(hash: Hex): Promise<boolean> {
+    // Prefer wagmi public client kalau ada, kalau tidak buat viem client sendiri
+    const pc: TxClient = (storyPc as TxClient) ?? getTxClient();
+
+    // Coba tunggu 1 konfirmasi dulu
+    try {
+      const r: any = await pc.waitForTransactionReceipt({ hash, confirmations: 1 });
+      const st = r?.status;
+      if (st === "success" || st === 1 || st === "0x1" || st === true) return true;
+      if (r?.blockNumber != null && st !== "reverted") return true;
+    } catch {
+      // lanjut ke polling
+    }
+
+    // Fallback polling (maks 3 menit)
+    const deadline = Date.now() + 180_000;
+    while (Date.now() < deadline) {
+      try {
+        const rcpt: any = await pc.getTransactionReceipt({ hash });
+        const st = rcpt?.status;
+        if (st === "success" || st === 1 || st === "0x1" || st === true) return true;
+        if (rcpt?.blockNumber != null && st !== "reverted") return true;
+      } catch {}
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    return false;
+  }
+
   async function onConfirm() {
     if (!intent) return;
+
+    // sembunyikan plan saat confirm
+    setPlan(null);
 
     if (intent.kind === "swap") {
       try {
@@ -236,7 +327,6 @@ export default function PromptAgent() {
         showStatus("Swapping via aggregator…");
         const tx = await swapViaAggregator(q.universalRoutes);
 
-        setStatus("Done");
         push(
           "agent",
           `Swap success ✅
@@ -258,11 +348,18 @@ Tx: ${tx.hash}
     if (intent.kind === "register") {
       try {
         if (!file) {
-          setStatus("Butuh gambar. Klik ikon attach.");
+          showStatus("Butuh gambar. Klik ikon attach.");
           setToast("Attach image dulu 📎");
           return;
         }
         await ensureAeneid();
+
+        // Pastikan env di-set untuk menghindari revert “Transaction failed”
+        const spgAddr = process.env.NEXT_PUBLIC_SPG_COLLECTION as `0x${string}` | undefined;
+        if (!spgAddr) {
+          push("agent", "❗ NEXT_PUBLIC_SPG_COLLECTION belum di-set. Set alamat koleksi SPG kamu di Aeneid (1315).");
+          return;
+        }
 
         showStatus("Optimizing image…");
         const fileToUpload = await compressImage(file);
@@ -325,8 +422,7 @@ Tx: ${tx.hash}
         showStatus("Submit tx: mint & register IP…");
         const client = await getClient();
         const res = await client.ipAsset.mintAndRegisterIp({
-          spgNftContract: (process.env.NEXT_PUBLIC_SPG_COLLECTION ||
-            "0xc32A8a0FF3beDDDa58393d022aF433e78739FAbc") as `0x${string}`,
+          spgNftContract: spgAddr,
           recipient: address as `0x${string}`,
           ipMetadata: {
             ipMetadataURI,
@@ -337,50 +433,21 @@ Tx: ${tx.hash}
           allowDuplicates: true,
         });
 
-        // tampilkan “submitted” dan link explorer
-        showStatus("Tx submitted. Menunggu konfirmasi…");
+        // tampilkan submitted link segera
         push(
           "agent",
-          `Tx submitted ⏳\n↗ View: ${explorerBase}/tx/${res.txHash}`
+          `Tx submitted ⏳
+↗ View: ${explorerBase}/tx/${res.txHash}`
         );
 
-        // tunggu konfirmasi (dengan fallback jika public client tidak ada / error)
-        let confirmed = false;
-        if (pc) {
-          try {
-            await pc.waitForTransactionReceipt({
-              hash: res.txHash as Hex,
-              confirmations: 1,
-            });
-            confirmed = true;
-          } catch {
-            // biarkan fallback; user tetap punya link explorer
-          }
-        }
-
-        if (!confirmed) {
-          // fallback polling ringan ~90s
-          const deadline = Date.now() + 90_000;
-          while (Date.now() < deadline && !confirmed) {
-            try {
-              const rcpt = await pc?.getTransactionReceipt({
-                hash: res.txHash as Hex,
-              });
-              if (rcpt) confirmed = true;
-            } catch {
-              /* still pending */
-            }
-            if (!confirmed) await new Promise((r) => setTimeout(r, 1500));
-          }
-        }
-
-        if (confirmed) {
-          setStatus("Done");
+        // tunggu konfirmasi (fallback polling 3 menit)
+        const ok = await awaitConfirmOnStory(res.txHash as Hex);
+        if (ok) {
+          const ipIdLine = res.ipId ? `ipId: ${res.ipId}\n` : "";
           push(
             "agent",
             `Register success ✅
-ipId: ${res.ipId}
-Tx: ${res.txHash}
+${ipIdLine}Tx: ${res.txHash}
 Image: ${imageGateway}
 IP Metadata: ${toHttps(ipMetaCid)}
 NFT Metadata: ${toHttps(nftMetaCid)}
@@ -389,8 +456,7 @@ NFT Metadata: ${toHttps(nftMetaCid)}
           setToast("IP registered ✅");
           clearPlan();
         } else {
-          // belum konfirmasi tapi setidaknya ada status jelas
-          showStatus("Tx masih pending di jaringan. Cek explorer.");
+          showStatus("Tx masih pending di jaringan. Pantau link explorer di atas.");
         }
       } catch (e: any) {
         push("agent", `Register error: ${e?.message || String(e)}`);
@@ -401,7 +467,7 @@ NFT Metadata: ${toHttps(nftMetaCid)}
 
   const canSend = isConnected && prompt.trim().length > 0;
 
-  /* ---------- UI: Shell seperti ChatGPT ---------- */
+  /* ---------- UI ---------- */
   return (
     <div className="mx-auto max-w-[1200px] px-4 md:px-6 overflow-x-hidden">
       <div className="grid grid-cols-1 lg:grid-cols-[280px,1fr] gap-6">
@@ -417,7 +483,6 @@ NFT Metadata: ${toHttps(nftMetaCid)}
               New
             </button>
           </div>
-
           {messages.filter((m) => m.role === "you").length === 0 ? (
             <p className="text-xs opacity-60">
               There are no interactions yet. Write the prompt on the right.
@@ -435,9 +500,9 @@ NFT Metadata: ${toHttps(nftMetaCid)}
           )}
         </aside>
 
-        {/* MAIN CHAT AREA */}
+        {/* MAIN CHAT */}
         <section className="rounded-2xl border border-white/10 bg-white/5 h-[calc(100vh-180px)] overflow-hidden flex flex-col">
-          {/* messages area */}
+          {/* messages */}
           <div
             ref={chatScrollRef}
             className="flex-1 overflow-y-auto scrollbar-invisible"
@@ -446,23 +511,16 @@ NFT Metadata: ${toHttps(nftMetaCid)}
               {messages.length === 0 ? (
                 <div className="text-xs opacity-60">
                   AI replies will appear here. Try:{" "}
-                  <span className="badge">
-                    Swap 1 WIP &gt; USDC slippage 0.5%
-                  </span>{" "}
+                  <span className="badge">Swap 1 WIP &gt; USDC slippage 0.5%</span>{" "}
                   or{" "}
-                  <span className="badge">
-                    Register this image IP, title "Sunset" by-nc
-                  </span>
-                  .
+                  <span className="badge">Register this image IP, title "Sunset" by-nc</span>.
                 </div>
               ) : (
                 <div className="space-y-3">
                   {messages.map((m, i) => (
                     <div
                       key={i}
-                      className={`flex ${
-                        m.role === "you" ? "justify-end" : "justify-start"
-                      }`}
+                      className={`flex ${m.role === "you" ? "justify-end" : "justify-start"}`}
                     >
                       <div
                         className={`max-w-[75%] rounded-2xl px-4 py-3 border ${
@@ -480,14 +538,12 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                 </div>
               )}
 
-              {/* plan box */}
+              {/* Plan — hanya tampil sebelum Confirm */}
               {plan && (
                 <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="text-sm opacity-70 mb-2">Plan</div>
                   <ol className="list-decimal pl-5 space-y-1 text-sm">
-                    {plan.map((p: string, i: number) => (
-                      <li key={i}>{p}</li>
-                    ))}
+                    {plan.map((p: string, i: number) => <li key={i}>{p}</li>)}
                   </ol>
                   <div className="flex gap-2 mt-3">
                     <button
@@ -508,10 +564,10 @@ NFT Metadata: ${toHttps(nftMetaCid)}
             </div>
           </div>
 
-          {/* composer sticky at bottom */}
+          {/* composer */}
           <div className="shrink-0 border-t border-white/10 bg-gradient-to-t from-black/20 to-transparent card relative overflow-visible">
             <div className="mx-auto w-full max-w-[820px] px-3 py-3">
-              <div className="relative flex items-end gap-2 rounded-2xl ring-1 ring-white/15 bg-white/5/30 backdrop-blur-md px-3 py-2 overflow-visible">
+              <div className="relative flex items-center gap-2 rounded-2xl ring-1 ring-white/15 bg-white/5/30 backdrop-blur-md px-3 py-2 overflow-visible">
                 {/* attach */}
                 <button
                   aria-label="Attach image"
@@ -529,7 +585,26 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                   onChange={(e) => onPickFile(e.target.files?.[0] || undefined)}
                 />
 
-                {/* textarea transparent */}
+                {/* inline preview */}
+                {previewUrl && (
+                  <div className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewUrl}
+                      alt="preview"
+                      className="h-8 w-8 rounded-md object-cover opacity-90"
+                    />
+                    <button
+                      className="absolute -top-1 -right-1 rounded-full border border-white/30 bg-black/60 p-0.5"
+                      onClick={removeFile}
+                      title="Remove image"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+
+                {/* textarea */}
                 <textarea
                   ref={taRef}
                   rows={1}
@@ -561,7 +636,7 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                   <Send className="h-5 w-5" />
                 </button>
 
-                {/* sprite di kanan-atas composer, dekat tombol send */}
+                {/* sprite di kanan-atas tombol */}
                 <Image
                   src="/brand/superlee-sprite.png"
                   alt=""
@@ -570,28 +645,6 @@ NFT Metadata: ${toHttps(nftMetaCid)}
                   priority
                   className="pointer-events-none select-none pixelated animate-float absolute -top-3 -right-3 w-12 h-12 z-20 drop-shadow-[0_10px_28px_rgba(34,211,238,.35)]"
                 />
-              </div>
-
-              {/* preview & status */}
-              <div className="mt-2 flex items-center gap-3">
-                {previewUrl && (
-                  <div className="flex items-center gap-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={previewUrl}
-                      alt="preview"
-                      className="h-8 w-8 rounded-md object-cover"
-                    />
-                    <button
-                      className="rounded-full border border-white/15 bg-white/5 px-2 py-1 text-xs"
-                      onClick={removeFile}
-                      title="Remove image"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                )}
-                {status && <span className="text-xs opacity-70">{status}</span>}
               </div>
             </div>
           </div>

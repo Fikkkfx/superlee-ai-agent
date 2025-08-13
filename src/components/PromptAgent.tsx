@@ -103,12 +103,16 @@ function isHexAddress(a: string): a is `0x${string}` {
   return /^0x[0-9a-fA-F]{40}$/.test(a);
 }
 
-/** Ambil SPG dari env secara aman: trim + validasi + bukan placeholder. */
+/** Ambil SPG dari env: trim + valid hex. (Tidak memblok meski sama dengan placeholder.) */
 function getEnvSpg(): `0x${string}` | null {
   const raw = (process.env.NEXT_PUBLIC_SPG_COLLECTION ?? "").trim();
+  if (!raw) return null;
   if (!isHexAddress(raw)) return null;
-  if (raw.toLowerCase() === PLACEHOLDER_SPG) return null;
   return raw as `0x${string}`;
+}
+
+function mask(addr: string) {
+  return addr.slice(0, 6) + "…" + addr.slice(-4);
 }
 
 function prettyErr(e: any): string {
@@ -376,18 +380,21 @@ Tx: ${tx.hash}
           return;
         }
 
-        // Env SPG (trim + validasi + bukan placeholder)
+        // Ambil SPG dari env (valid hex). Jika null -> belum set / salah format.
         const spgAddr = getEnvSpg();
         if (!spgAddr) {
           push(
             "agent",
-            "❗ NEXT_PUBLIC_SPG_COLLECTION belum valid / masih placeholder. " +
-              "Set alamat koleksi SPG kamu di Aeneid (1315) di .env.local lalu restart dev server."
+            "❗ NEXT_PUBLIC_SPG_COLLECTION belum valid. Pastikan formatnya adalah alamat hex 42 karakter (0x + 40 hex) di .env.local, lalu restart dev server."
           );
           return;
         }
-        // Info ke user alamat yang dipakai (untuk verifikasi cepat)
-        push("agent", `Using SPG collection: ${spgAddr}`);
+
+        // Info ke user alamat yang dipakai (masking)
+        push("agent", `Using SPG collection: ${mask(spgAddr)}`);
+        if (spgAddr.toLowerCase() === PLACEHOLDER_SPG) {
+          push("agent", "⚠️ Alamat ini tampak seperti placeholder. Tetap melanjutkan sesuai permintaan…");
+        }
 
         // Pastikan chain
         if (!(await ensureAeneid())) {

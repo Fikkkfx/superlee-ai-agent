@@ -393,7 +393,7 @@ Tx: ${tx.hash}
         // Info ke user alamat yang dipakai (masking)
         push("agent", `Using SPG collection: ${mask(spgAddr)}`);
         if (spgAddr.toLowerCase() === PLACEHOLDER_SPG) {
-          push("agent", "⚠️ Alamat ini tampak seperti placeholder. Tetap melanjutkan sesuai permintaan…");
+          push("agent", "⚠️ This address appears to be a placeholder. Please continue as requested…");
         }
 
         // Pastikan chain

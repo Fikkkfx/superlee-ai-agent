@@ -1,6 +1,7 @@
 // src/lib/agent/engine.ts
-import { findTokenAddress, symbolFor, readyTokens } from "@/lib/agent/tokens";
+import { readyTokens, findTokenAddress, symbolFor } from "@/lib/agent/tokens";
 
+/* ---------- types ---------- */
 type Ask = { type: "ask"; question: string };
 
 export type SwapIntent = {
@@ -11,8 +12,17 @@ export type SwapIntent = {
   slippagePct: number;
 };
 
-type PlanOK = { type: "plan"; plan: string[]; intent: SwapIntent };
+export type RegisterIntent = {
+  kind: "register";
+  title?: string;
+  prompt?: string;   // bisa dipakai sebagai deskripsi/prompt AI
+  license?: string;  // mis. "by-nc"
+  allowDuplicates?: boolean;
+};
 
+type PlanOK = { type: "plan"; plan: string[]; intent: SwapIntent | RegisterIntent };
+
+/* ---------- regex ---------- */
 const RE_SWAP =
   /^\s*swap\s+([\d_,.]+)\s+([^\s>]+)\s*>\s*([^\s]+)(?:\s+slippage\s+([\d_,.]+)%?)?\s*$/i;
 
@@ -23,13 +33,62 @@ function ask(msg: string): Ask {
   return { type: "ask", question: msg };
 }
 
-/** Parse prompt → intent swap (async karena load registry). */
+/* ---------- register parser ---------- */
+function parseRegister(t: string): RegisterIntent | null {
+  // terima variasi: register this image ip, title "Sunset" by-nc
+  //                 register image ip title Sunset
+  //                 register ip title "My Work"
+  if (!/^ *register\b/i.test(t)) return null;
+
+  const titleInQuotes = t.match(/title\s+["“”'']([^"“”']+)["“”'']/i)?.[1];
+  const titleBare = titleInQuotes
+    ? undefined
+    : t.match(/title\s+([^\n,]+?)(?:\s+by-[a-z0-9-]+|\s*$)/i)?.[1];
+
+  const license = t.match(/\bby-[a-z0-9-]+\b/i)?.[0]?.toLowerCase();
+
+  const title = (titleInQuotes || titleBare || "").trim() || undefined;
+
+  return {
+    kind: "register",
+    title,
+    prompt: t,          // biar ikut tersimpan sebagai deskripsi/prompt
+    license,
+    allowDuplicates: true,
+  };
+}
+
+/* ---------- main decide (async) ---------- */
 export async function decide(text: string): Promise<Ask | PlanOK> {
-  const t = text.trim();
-  const m = t.match(RE_SWAP);
+  const input = text.trim();
+
+  // 1) Coba parse REGISTER dulu supaya tidak jatuh ke fallback swap error
+  const reg = parseRegister(input);
+  if (reg) {
+    const pretty = [
+      `Register IP${reg.title ? `, title "${reg.title}"` : ""}`,
+      reg.license ? `license ${reg.license}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    const plan = [
+      `Parse: ${pretty || "Register IP"}`,
+      "Optimizing image",
+      "Upload image ke IPFS",
+      "Upload IP metadata",
+      "Upload NFT metadata",
+      "Submit tx: mint & register IP",
+      "Tampilkan tx hash & link explorer",
+    ];
+    return { type: "plan", plan, intent: reg };
+  }
+
+  // 2) Coba parse SWAP
+  const m = input.match(RE_SWAP);
   if (!m) {
     return ask(
-      'Butuh token in (alamat/simbol), token out (alamat/simbol). Contoh: “Swap 1 WIP > USDC slippage 0.5%”.'
+      'Perintah tidak dikenali. Contoh:\n• Swap:  "Swap 1 WIP > USDC slippage 0.5%"\n• Register: "Register this image IP, title \\"Sunset\\" by-nc"'
     );
   }
 
@@ -42,25 +101,24 @@ export async function decide(text: string): Promise<Ask | PlanOK> {
     return ask("Jumlah swap tidak valid.");
   }
 
-  // Pastikan registry terisi
+  // Pastikan registry StoryHunt/ENV sudah siap
   await readyTokens();
 
-  // Resolve simbol / alias → address
-  const aIn = findTokenAddress(inSym);
+  // resolve simbol/alamat
+  const aIn = await findTokenAddress(inSym);
   if (!aIn) return ask(`Token input "${inSym}" tidak dikenali.`);
-  const aOut = findTokenAddress(outSym);
+  const aOut = await findTokenAddress(outSym);
   if (!aOut) return ask(`Token output "${outSym}" tidak dikenali.`);
 
-  const sIn = symbolFor(aIn);
-  const sOut = symbolFor(aOut);
+  const [sIn, sOut] = await Promise.all([symbolFor(aIn), symbolFor(aOut)]);
 
   const plan = [
     `Parse: ${amount} ${sIn} → ${sOut}${
       isFinite(slippage) ? ` (slippage ${slippage}%)` : ""
     }`,
-    "Ambil quote dari StoryHunt",
+    "Ambil quote dari Aggregator",
     "Approve token in (jika perlu)",
-    "Eksekusi swap",
+    "Eksekusi swap via Aggregator",
     "Tampilkan tx hash & link explorer",
   ];
 

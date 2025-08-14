@@ -1,147 +1,80 @@
-// src/lib/agent/tokens.ts
 export type TokenEntry = {
   symbol: string;
   address: `0x${string}`;
-  aliases?: string[];
+  decimals?: number | null;
+  aliases?: string[]; // lowercase
 };
 
-type RegistryToken = { symbol?: string; ticker?: string; address?: string; tokenAddress?: string };
+const isAddr = (s: string): s is `0x${string}` => /^0x[0-9a-fA-F]{40}$/.test(s);
+const env = (k: string) => (process.env[k] || "").trim();
 
-const FIVE_MIN = 5 * 60 * 1000;
+// ===== ENV fallback (opsional, supaya tetap jalan kalau API down) =====
+const ENV_TOKENS: TokenEntry[] = [];
+{
+  const wip = env("NEXT_PUBLIC_PIPERX_WIP");
+  if (isAddr(wip)) ENV_TOKENS.push({ symbol: "WIP", address: wip as `0x${string}`, aliases: ["ip","wip","native"] });
 
-const isHex = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(s);
-const envAddr = (k: string) => (process.env[k]?.trim() || "") as `0x${string}` | "";
+  const usdc = env("NEXT_PUBLIC_TOKEN_USDC");
+  if (isAddr(usdc)) ENV_TOKENS.push({ symbol: "USDC", address: usdc as `0x${string}`, aliases: ["usdc","usd c","stable","dollar"] });
 
-const ENV_TOKENS: TokenEntry[] = (() => {
-  const out: TokenEntry[] = [];
-  const wip = envAddr("NEXT_PUBLIC_PIPERX_WIP");
-  if (wip)
-    out.push({
-      symbol: "WIP",
-      address: wip,
-      aliases: ["ip", "wip", "wrap ip", "wrapped ip", "native"],
-    });
-
-  const usdc = envAddr("NEXT_PUBLIC_TOKEN_USDC");
-  if (usdc)
-    out.push({
-      symbol: "USDC",
-      address: usdc,
-      aliases: ["usdc", "usd c", "stable", "dollar"],
-    });
-
-  const weth = envAddr("NEXT_PUBLIC_TOKEN_WETH");
-  if (weth)
-    out.push({
-      symbol: "WETH",
-      address: weth,
-      aliases: ["eth", "weth", "wrapped eth"],
-    });
-
-  return out;
-})();
-
-let CACHE:
-  | {
-      at: number;
-      bySymbol: Map<string, TokenEntry>;
-      byAddr: Map<string, TokenEntry>;
-    }
-  | null = null;
-
-function buildIndex(list: TokenEntry[]) {
-  const bySymbol = new Map<string, TokenEntry>();
-  const byAddr = new Map<string, TokenEntry>();
-  for (const t of list) {
-    const base = { ...t, symbol: t.symbol.toUpperCase() };
-    byAddr.set(base.address.toLowerCase(), base);
-    const keys = [base.symbol.toLowerCase(), ...(base.aliases?.map((a) => a.toLowerCase()) || [])];
-    for (const k of keys) if (!bySymbol.has(k)) bySymbol.set(k, base);
-  }
-
-  // Tambah alias IP otomatis ke WIP bila ada
-  const wip = [...byAddr.values()].find((x) => x.symbol === "WIP");
-  if (wip) {
-    for (const k of ["ip", "wip", "wrap ip", "wrapped ip", "native"])
-      if (!bySymbol.has(k)) bySymbol.set(k, wip);
-  }
-
-  return { bySymbol, byAddr };
+  const weth = env("NEXT_PUBLIC_TOKEN_WETH");
+  if (isAddr(weth)) ENV_TOKENS.push({ symbol: "WETH", address: weth as `0x${string}`, aliases: ["eth","weth","wrapped eth"] });
 }
 
-async function fetchRegistry(): Promise<TokenEntry[]> {
-  // Coba dua path agar tidak tergantung penamaan folder
-  const tryUrls = ["/api/piperx_tokens", "/api/piperx/tokens"];
-  for (const u of tryUrls) {
-    try {
-      const r = await fetch(u);
-      if (!r.ok) continue;
-      const data = await r.json();
-      const arr: RegistryToken[] = Array.isArray(data) ? data : data?.tokens || [];
-      const out: TokenEntry[] = [];
-      for (const it of arr) {
-        const symbol = String(it.symbol ?? it.ticker ?? "").toUpperCase().trim();
-        const addr = String(it.address ?? it.tokenAddress ?? "").toLowerCase();
-        if (symbol && isHex(addr)) out.push({ symbol, address: addr as `0x${string}` });
-      }
-      return out;
-    } catch {
-      /* try next url */
-    }
-  }
-  return [];
+// ===== Cache dari API PiperX =====
+let loadedAt = 0;
+let mapBySymbol = new Map<string, TokenEntry>();  // key: lower symbol/alias
+let mapByAddr = new Map<string, TokenEntry>();    // key: lower address
+const TTL_MS = 5 * 60 * 1000;
+
+function indexToken(t: TokenEntry) {
+  mapByAddr.set(t.address.toLowerCase(), t);
+  mapBySymbol.set(t.symbol.toLowerCase(), t);
+  for (const a of t.aliases || []) mapBySymbol.set(a.toLowerCase(), t);
 }
 
-export async function readyTokens(force = false) {
-  if (!force && CACHE && Date.now() - CACHE.at < FIVE_MIN) return;
+export async function loadPiperxRegistry(force = false) {
+  if (!force && Date.now() - loadedAt < TTL_MS && mapByAddr.size > 0) return;
+  mapByAddr = new Map();
+  mapBySymbol = new Map();
+  // muat ENV dulu sebagai fallback
+  for (const t of ENV_TOKENS) indexToken(t);
 
-  const fromRegistry = await fetchRegistry().catch(() => [] as TokenEntry[]);
-  // Merge: registry + ENV (ENV override/menambah alias)
-  const merged: TokenEntry[] = [];
-  const merge = (src: TokenEntry[]) => {
-    for (const t of src) {
-      const i = merged.findIndex(
-        (x) =>
-          x.address.toLowerCase() === t.address.toLowerCase() ||
-          x.symbol.toLowerCase() === t.symbol.toLowerCase()
-      );
-      if (i >= 0) {
-        merged[i] = {
-          symbol: t.symbol || merged[i].symbol,
-          address: (t.address || merged[i].address) as `0x${string}`,
-          aliases: [...new Set([...(merged[i].aliases || []), ...(t.aliases || [])])],
-        };
-      } else {
-        merged.push({ ...t, aliases: [...(t.aliases || [])] });
-      }
+  try {
+    const r = await fetch("/api/piperx_tokens", { cache: "no-store" });
+    if (r.ok) {
+      const j = await r.json();
+      const arr: TokenEntry[] = Array.isArray(j.tokens) ? j.tokens : [];
+      for (const t of arr) indexToken({
+        symbol: t.symbol.toUpperCase(),
+        address: t.address as `0x${string}`,
+        decimals: t.decimals ?? null,
+        aliases: (t.aliases || []).map((x: string) => x.toLowerCase()),
+      });
     }
-  };
-  merge(fromRegistry);
-  merge(ENV_TOKENS);
+  } catch { /* diam: tetap pakai ENV */ }
 
-  const idx = buildIndex(merged);
-  CACHE = { at: Date.now(), ...idx };
-
-  // (opsional) debug di console
-  (globalThis as any).__TOKENS__ = {
-    count: merged.length,
-    sample: merged.slice(0, 6),
-  };
+  loadedAt = Date.now();
 }
 
-/** Resolve simbol/alias/alamat → address */
-export async function findTokenAddress(input: string): Promise<`0x${string}` | null> {
+export async function readyTokens() {
+  await loadPiperxRegistry(false);
+}
+
+export function findTokenAddress(input: string): `0x${string}` | null {
+  const s = (input || "").trim();
+  if (!s) return null;
+  if (isAddr(s)) return s as `0x${string}`;
+  const hit = mapBySymbol.get(s.toLowerCase());
+  return hit ? hit.address : null;
+}
+
+export async function findTokenAddressAsync(input: string): Promise<`0x${string}` | null> {
   await readyTokens();
-  const raw = input.trim();
-  if (isHex(raw)) return raw as `0x${string}`;
-  const key = raw.toLowerCase();
-  const t = CACHE?.bySymbol.get(key);
-  return t ? (t.address as `0x${string}`) : null;
+  return findTokenAddress(input);
 }
 
-/** Dapatkan simbol untuk sebuah address (untuk tampilan Plan/log) */
-export async function symbolFor(address: string): Promise<string> {
-  await readyTokens();
-  const t = CACHE?.byAddr.get(address.toLowerCase());
+export function symbolFor(address: string): string {
+  const t = mapByAddr.get(address.toLowerCase());
   return t?.symbol || address;
 }

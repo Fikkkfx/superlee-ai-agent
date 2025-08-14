@@ -25,7 +25,8 @@ function ask(msg: string): Ask {
 
 /**
  * Parse prompt user → intent swap.
- * Async karena perlu resolve simbol via PiperX registry.
+ * Async karena perlu load registry PiperX sekali (cache 5 menit),
+ * tapi resolver token-nya sendiri sinkron.
  */
 export async function decide(text: string): Promise<Ask | PlanOK> {
   const t = text.trim();
@@ -45,17 +46,18 @@ export async function decide(text: string): Promise<Ask | PlanOK> {
     return ask("Jumlah swap tidak valid.");
   }
 
-  // Pastikan registry PiperX ter-load (cached 5 menit)
+  // Muat & cache registry PiperX (dari /api/piperx_tokens + fallback ENV)
   await readyTokens();
 
   // Resolve simbol/alias → address (atau langsung address)
-  const aIn = await findTokenAddress(inSym);
+  const aIn = findTokenAddress(inSym);
   if (!aIn) return ask(`Token input "${inSym}" tidak dikenali.`);
 
-  const aOut = await findTokenAddress(outSym);
+  const aOut = findTokenAddress(outSym);
   if (!aOut) return ask(`Token output "${outSym}" tidak dikenali.`);
 
-  const [sIn, sOut] = await Promise.all([symbolFor(aIn), symbolFor(aOut)]);
+  const sIn = symbolFor(aIn);
+  const sOut = symbolFor(aOut);
 
   const plan = [
     `Parse: ${amount} ${sIn} → ${sOut}${

@@ -10,7 +10,7 @@ import {
 import { storyAeneid } from "@/lib/chains/story";
 
 // WalletConnect Project ID (set di .env lokal & Vercel)
-const projectId = process.env.NEXT_PUBLIC_WC_PROJECT_ID ?? "demo";
+const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_ID ?? "demo";
 
 // RPC Story (boleh override)
 const rpcUrl =

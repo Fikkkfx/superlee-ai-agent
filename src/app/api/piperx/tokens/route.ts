@@ -1,7 +1,6 @@
-// src/app/api/piperx/route.ts
 import { NextResponse } from "next/server";
 
-export const revalidate = 300; // 5 menit (cache ISR)
+export const revalidate = 300; // 5 minutes
 
 export async function GET() {
   try {
@@ -13,7 +12,6 @@ export async function GET() {
     if (!r.ok) return NextResponse.json({ tokens: [] }, { status: 200 });
 
     const data = await r.json();
-    // Normalisasi agar tokens.ts bisa membaca
     const tokens = Array.isArray(data) ? data : data?.tokens || [];
     return NextResponse.json({ tokens });
   } catch {

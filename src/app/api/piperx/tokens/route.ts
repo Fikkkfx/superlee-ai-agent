@@ -5,7 +5,7 @@ export const revalidate = 300; // 5 minutes
 export async function GET() {
   try {
     const base = process.env.NEXT_PUBLIC_PIPERX_AGGREGATOR_API || "https://api.piperx.xyz";
-    const chainId = Number(process.env.NEXT_PUBLIC_CHAIN_ID || 1315);
+    const chainId = Number(process.env.NEXT_PUBLIC_STORY_CHAIN_ID || 1315);
     const url = `${base.replace(/\/+$/, "")}/v1/tokens?chainId=${chainId}`;
 
     const r = await fetch(url, { next: { revalidate } });

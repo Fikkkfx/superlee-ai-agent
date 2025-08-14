@@ -1,10 +1,5 @@
 // src/lib/agent/engine.ts
-import {
-  findTokenAddress,
-  findTokenAddressAsync,
-  symbolFor,
-  loadPiperxRegistry,
-} from "./tokens";
+import { findTokenAddress, symbolFor, readyTokens } from "@/lib/agent/tokens";
 
 type Ask = { type: "ask"; question: string };
 
@@ -30,7 +25,7 @@ function ask(msg: string): Ask {
 
 /**
  * Parse prompt user → intent swap.
- * Kini ASINKRON, agar bisa resolve simbol token dari PiperX registry.
+ * Async karena perlu resolve simbol via PiperX registry.
  */
 export async function decide(text: string): Promise<Ask | PlanOK> {
   const t = text.trim();
@@ -50,20 +45,20 @@ export async function decide(text: string): Promise<Ask | PlanOK> {
     return ask("Jumlah swap tidak valid.");
   }
 
-  // Pastikan registry PiperX tersedia (akan cache 5 menit)
-  await loadPiperxRegistry().catch(() => {});
+  // Pastikan registry PiperX ter-load (cached 5 menit)
+  await readyTokens();
 
-  // Coba resolve via registry; fallback ke ENV bila belum ada
-  let aIn = await findTokenAddressAsync(inSym);
-  if (!aIn) aIn = findTokenAddress(inSym);
-  let aOut = await findTokenAddressAsync(outSym);
-  if (!aOut) aOut = findTokenAddress(outSym);
-
+  // Resolve simbol/alias → address (atau langsung address)
+  const aIn = await findTokenAddress(inSym);
   if (!aIn) return ask(`Token input "${inSym}" tidak dikenali.`);
+
+  const aOut = await findTokenAddress(outSym);
   if (!aOut) return ask(`Token output "${outSym}" tidak dikenali.`);
 
+  const [sIn, sOut] = await Promise.all([symbolFor(aIn), symbolFor(aOut)]);
+
   const plan = [
-    `Parse: ${amount} ${symbolFor(aIn)} → ${symbolFor(aOut)}${
+    `Parse: ${amount} ${sIn} → ${sOut}${
       isFinite(slippage) ? ` (slippage ${slippage}%)` : ""
     }`,
     "Ambil quote dari PiperX Aggregator",

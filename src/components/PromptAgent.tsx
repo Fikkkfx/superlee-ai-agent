@@ -26,6 +26,9 @@ import {
   createPublicClient,
   http,
 } from "viem";
+import { formatUnits } from "viem";
+import { previewSwap, ensureSufficientBalance, approveIfNeeded, executeSwap } from "@/lib/swapper";
+import { resolveToken, symbolFor } from "@/lib/agent/tokens";
 
 /* ---------- utils (hash, ipfs, fetch) ---------- */
 function bytesKeccak(data: Uint8Array): `0x${string}` {
@@ -337,40 +340,85 @@ export default function PromptAgent() {
     setPlan(null);
 
     if (intent.kind === "swap") {
-      try {
-        showStatus("Fetching quote…");
-        const dec = await getDecimals(intent.tokenIn as `0x${string}`);
-        const amountRaw = parseUnits(String(intent.amount), dec);
-        const q = await getQuote({
-          tokenIn: intent.tokenIn,
-          tokenOut: intent.tokenOut,
-          amountInRaw: amountRaw.toString(),
-          slippagePct: intent.slippagePct,
-        });
+  try {
+    const tokenIn = intent.tokenIn as `0x${string}`;
+    const tokenOut = intent.tokenOut as `0x${string}`;
+    const slippagePct: number = Number(intent.slippagePct ?? 0.5); // default 0.5%
+    const amountHuman = String(intent.amount);
 
-        showStatus("Approving token…");
-        await approveForAggregator(intent.tokenIn as `0x${string}`, amountRaw);
-
-        showStatus("Swapping via aggregator…");
-        const tx = await swapViaAggregator(q.universalRoutes);
-
-        push(
-          "agent",
-          `Swap success ✅
-From: ${intent.tokenIn}
-To: ${intent.tokenOut}
-Amount: ${intent.amount}
-Tx: ${tx.hash}
-↗ View: ${explorerBase}/tx/${tx.hash}`
-        );
-        setToast("Swap success ✅");
-        clearPlan();
-      } catch (e: any) {
-        push("agent", `Swap error: ${prettyErr(e)}`);
-        setToast("Swap error ❌");
-      }
+    if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
+      push("agent", "Swap error: token in/out tidak boleh sama.");
       return;
     }
+
+    showStatus("Preparing quote…");
+    const pv = await previewSwap({
+      tokenIn,
+      tokenOut,
+      amount: amountHuman,
+      slippagePct,
+    });
+
+    // pastikan balance cukup (native / ERC20)
+    const pcAny: any = storyPc ?? getTxClient(); // pakai public client yg sudah ada
+    await ensureSufficientBalance({
+      publicClient: pcAny,
+      owner: address as `0x${string}`,
+      token: tokenIn,
+      amountRaw: pv.amountInRaw,
+    });
+
+    // summary sebelum eksekusi
+    push(
+      "agent",
+      [
+        "Quote ✅",
+        `Amount In: ${amountHuman}`,
+        `Expected Out: ${pv.amountOutFormatted}`,
+        `Min Out (@${slippagePct}%): ${pv.minAmountOutFormatted}`,
+      ].join("\n")
+    );
+
+    showStatus("Approving token (if needed) …");
+    await approveIfNeeded({
+      publicClient: pcAny,
+      owner: address as `0x${string}`,
+      token: tokenIn,
+      amountRaw: pv.amountInRaw,
+      spender: pv.spender,
+    });
+
+    showStatus("Submitting swap…");
+    const tx = await executeSwap(pv.route);
+
+    push(
+      "agent",
+      `Swap submitted ⏳
+Tx: ${tx.hash}
+↗ View: ${explorerBase}/tx/${tx.hash}`
+    );
+
+    // tunggu konfirmasi seperti sebelumnya
+    const ok = await awaitConfirmOnStory(tx.hash as Hex);
+    if (ok) {
+      push(
+        "agent",
+        `Swap success ✅
+Min received (est): ${pv.minAmountOutFormatted}
+Tx: ${tx.hash}
+↗ View: ${explorerBase}/tx/${tx.hash}`
+      );
+      setToast("Swap success ✅");
+      clearPlan();
+    } else {
+      showStatus("Tx masih pending di jaringan. Pantau link explorer di atas.");
+    }
+  } catch (e: any) {
+    push("agent", `Swap error: ${prettyErr(e)}`);
+    setToast("Swap error ❌");
+  }
+  return;
+}
 
     if (intent.kind === "register") {
       try {

@@ -276,8 +276,12 @@ export default function DashboardPage() {
           </button>
         )}
       </div>
-
+        <section className="rounded-2xl border border-white/10 bg-white/5 flex flex-col">
       {/* HEADER PANEL */}
+      <div className="relative">
+  {/* kontainer scroll */}
+  <div className="max-h-[calc(100vh-240px)] overflow-y-auto pr-1 scrollbar-invisible">
+    <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
       <div className="card">
         <h2 className="text-lg font-semibold">My Registered IP</h2>
         <p className="text-sm opacity-70">
@@ -390,7 +394,11 @@ export default function DashboardPage() {
             </div>
           );
         })}
+        </div>
+  </div>
+</div>
       </div>
+      </section>
     </div>
   );
 }

@@ -41,7 +41,7 @@ export async function loadPiperxRegistry(force = false) {
   for (const t of ENV_TOKENS) indexToken(t);
 
   try {
-    const r = await fetch("/api/piperx_tokens", { cache: "no-store" });
+    const r = await fetch("/api/piperx/tokens/route", { cache: "no-store" });
     if (r.ok) {
       const j = await r.json();
       const arr: TokenEntry[] = Array.isArray(j.tokens) ? j.tokens : [];

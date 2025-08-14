@@ -100,15 +100,27 @@ type TxClient = {
 
 type Msg = { role: "you" | "agent"; text: string; ts: number };
 
-/* ---------- helpers tambahan (SPG & error) ---------- */
+/* ---------- SPG resolver & error helper ---------- */
 const PLACEHOLDER_SPG = "0xc32A8a0FF3beDDDa58393d022aF433e78739FAbc".toLowerCase();
-
+const SPG_OVERRIDE_KEY = "SPG_COLLECTION_OVERRIDE";
 function isHexAddress(a: string): a is `0x${string}` {
   return /^0x[0-9a-fA-F]{40}$/.test(a);
 }
-function getEnvSpg(): `0x${string}` | null {
+/** Prioritas: ?spg=… → localStorage → NEXT_PUBLIC_SPG_COLLECTION */
+function resolveSpg(): `0x${string}` | null {
+  if (typeof window !== "undefined") {
+    const qs = new URLSearchParams(window.location.search);
+    const fromQs = qs.get("spg")?.trim();
+    if (fromQs && isHexAddress(fromQs)) {
+      localStorage.setItem(SPG_OVERRIDE_KEY, fromQs);
+      return fromQs as `0x${string}`;
+    }
+    const fromLs = localStorage.getItem(SPG_OVERRIDE_KEY)?.trim();
+    if (fromLs && isHexAddress(fromLs)) return fromLs as `0x${string}`;
+  }
   const raw = (process.env.NEXT_PUBLIC_SPG_COLLECTION ?? "").trim();
-  return isHexAddress(raw) ? (raw as `0x${string}`) : null;
+  if (isHexAddress(raw)) return raw as `0x${string}`;
+  return null;
 }
 function mask(addr: string) {
   return addr.slice(0, 6) + "…" + addr.slice(-4);
@@ -120,7 +132,7 @@ function prettyErr(e: any): string {
   if (e?.message) msgs.push(e.message);
   const joined = msgs.join(" | ");
   if (/Transaction failed|revert/i.test(joined))
-    return `${joined} — kemungkinan alamat SPG collection tidak valid/izin mint tidak sesuai. Pastikan NEXT_PUBLIC_SPG_COLLECTION adalah koleksi SPG milikmu di Aeneid (1315).`;
+    return `${joined} — kemungkinan SPG collection tidak valid/izin mint tidak sesuai. Pastikan NEXT_PUBLIC_SPG_COLLECTION adalah koleksi SPG milikmu di Aeneid (1315).`;
   return joined || String(e);
 }
 
@@ -283,7 +295,7 @@ export default function PromptAgent() {
     if (taRef.current) taRef.current.style.height = "40px";
 
     try {
-      const d = await decide(p); // async
+      const d = await decide(p); // async engine — resolve simbol via registry
       if (d.type === "ask") {
         setPlan(null);
         setIntent(null);
@@ -340,12 +352,6 @@ export default function PromptAgent() {
 
     if (intent.kind === "swap") {
       try {
-        // pastikan di Aeneid untuk aggregator/route
-        if (!(await ensureAeneid())) {
-          push("agent", "❗ Gagal switch ke Aeneid (1315). Swap dibatalkan.");
-          return;
-        }
-
         const tokenIn = intent.tokenIn as `0x${string}`;
         const tokenOut = intent.tokenOut as `0x${string}`;
         const slippagePct: number = Number(intent.slippagePct ?? 0.5); // default 0.5%
@@ -353,6 +359,12 @@ export default function PromptAgent() {
 
         if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
           push("agent", "Swap error: token in/out tidak boleh sama.");
+          return;
+        }
+
+        // Pastikan chain
+        if (!(await ensureAeneid())) {
+          push("agent", "❗ Gagal switch ke Aeneid (1315). Transaksi dibatalkan.");
           return;
         }
 
@@ -433,18 +445,20 @@ Tx: ${tx.hash}
           return;
         }
 
-        // Ambil SPG dari env (valid hex). Jika null -> belum set / salah format.
-        const spgAddr = getEnvSpg();
+        // SPG Address
+        const spgAddr = resolveSpg();
         if (!spgAddr || spgAddr.toLowerCase() === PLACEHOLDER_SPG) {
           push(
             "agent",
-            "❗ SPG collection belum diset (atau masih placeholder). Isi NEXT_PUBLIC_SPG_COLLECTION dengan koleksi SPG milikmu di Aeneid (1315), lalu restart / redeploy."
+            "❗ SPG collection belum diset (atau masih placeholder). " +
+              "Isi NEXT_PUBLIC_SPG_COLLECTION=0xYourSpgAddress di .env.local lalu restart / redeploy. " +
+              "Atau override cepat via URL: ?spg=0xYourSpgAddress"
           );
           return;
         }
         push("agent", `Using SPG collection: ${mask(spgAddr)}`);
 
-        // Pastikan chain sebelum mulai upload/execute
+        // Pastikan chain
         if (!(await ensureAeneid())) {
           push("agent", "❗ Gagal switch ke Aeneid (1315). Transaksi dibatalkan.");
           return;
@@ -559,6 +573,19 @@ NFT Metadata: ${toHttps(nftMetaCid)}
   /* ---------- UI ---------- */
   return (
     <div className="mx-auto max-w-[1200px] px-4 md:px-6 overflow-x-hidden">
+      <div className="flex items-center justify-between mb-2 text-xs opacity-70">
+        <div>
+          SPG:&nbsp;
+          {(() => {
+            const a = resolveSpg();
+            return a ? mask(a) : "— not set —";
+          })()}
+        </div>
+        <div className="opacity-60">
+          Network: Aeneid (1315)
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-[280px,1fr] gap-6">
         {/* SIDEBAR (History) */}
         <aside className="rounded-2xl border border-white/10 bg-white/5 p-4 h-[calc(100vh-180px)] overflow-y-auto scrollbar-invisible">

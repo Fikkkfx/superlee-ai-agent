@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const BASE = "https://piperxdb.piperxprotocol.workers.dev";
+const BASE = "https://api.storyapis.com";
 const CHAIN_ID = Number(process.env.NEXT_PUBLIC_CHAIN_ID || "1315"); // Story mainnet per docs
 
 export const revalidate = 300; // cache 5 menit di edge

@@ -1,44 +1,58 @@
 // src/app/api/storyhunt/tokens/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-/**
- * Ambil token list StoryHunt dari GitHub default-list.
- * Bisa override via ENV: STORYHUNT_TOKENLIST_URL
- * Default: https://raw.githubusercontent.com/0xstoryhunt/default-list/main/tokenlist.json
- */
-const DEF_URL =
-  "https://raw.githubusercontent.com/0xstoryhunt/default-list/main/tokenlist.json";
-const SRC = (process.env.STORYHUNT_TOKENLIST_URL || DEF_URL).trim();
+const TOKENLIST_URL =
+  process.env.STORYHUNT_TOKENLIST_URL ||
+  // default list resmi StoryHunt (raw GitHub)
+  "https://raw.githubusercontent.com/0xstoryhunt/default-list/main/storyhunt.tokenlist.json";
 
-export async function GET(_req: NextRequest) {
+// Fallback ENV tokens supaya UI tetap jalan kalau upstream 5xx
+function envTokens() {
+  const out: Array<{symbol:string;address:string;decimals?:number;aliases?:string[]}> = [];
+  const push = (sym: string, addr?: string | null, aliases: string[] = [], decimals?: number) => {
+    if (addr && /^0x[a-fA-F0-9]{40}$/.test(addr)) out.push({ symbol: sym, address: addr, aliases, decimals });
+  };
+  push("WIP", process.env.NEXT_PUBLIC_STORYHUNT_WIP, ["ip","wip","native"]);
+  push("USDC", process.env.NEXT_PUBLIC_TOKEN_USDC, ["usdc","usd c","stable"]);
+  push("WETH", process.env.NEXT_PUBLIC_TOKEN_WETH, ["eth","weth","wrapped eth"]);
+  return out;
+}
+
+export async function GET() {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 10_000); // 10s timeout
   try {
-    const r = await fetch(SRC, { cache: "no-store" });
-    if (!r.ok) {
-      const t = await r.text().catch(() => "");
-      return NextResponse.json(
-        { error: `Upstream ${r.status}`, detail: t.slice(0, 200) },
-        { status: 502 }
-      );
-    }
+    const r = await fetch(TOKENLIST_URL, {
+      // cache 1 jam biar hemat
+      next: { revalidate: 3600 },
+      signal: controller.signal,
+    });
+    if (!r.ok) throw new Error(`Upstream tokenlist ${r.status}`);
     const j = await r.json();
 
-    // Normalisasi → { tokens: [{symbol,address,decimals,aliases?}] }
-    const raw = Array.isArray(j?.tokens) ? j.tokens : Array.isArray(j) ? j : [];
-    const tokens = raw
-      .map((x: any) => ({
-        symbol: String(x.symbol || x.ticker || "").toUpperCase(),
-        address: String(x.address || x.tokenAddress || "").toLowerCase(),
-        decimals: x.decimals ?? null,
-        aliases: (x.aliases || x.tags || []).map((z: any) =>
-          String(z).toLowerCase()
-        ),
-      }))
-      .filter((t: any) => /^0x[0-9a-fA-F]{40}$/.test(t.address));
-    return NextResponse.json({ tokens });
-  } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message || "token list error" },
-      { status: 500 }
-    );
+    // Normalisasi -> {symbol,address,decimals,aliases}
+    const tokens = Array.isArray(j?.tokens)
+      ? j.tokens.map((t: any) => ({
+          symbol: String(t.symbol || "").toUpperCase(),
+          address: String(t.address || ""),
+          decimals: typeof t.decimals === "number" ? t.decimals : undefined,
+          aliases: Array.isArray(t.aliases) ? t.aliases.map((x: string) => x.toLowerCase()) : [],
+        }))
+      : [];
+
+    // Gabungkan ENV fallback agar pasti ada minimal 1–2 token
+    const mergedMap = new Map<string, any>();
+    for (const x of [...envTokens(), ...tokens]) {
+      const k = (x.address || "").toLowerCase();
+      if (k) mergedMap.set(k, x);
+    }
+    const merged = [...mergedMap.values()];
+    return NextResponse.json({ tokens: merged });
+  } catch (e) {
+    console.error("[storyhunt/tokens] fail:", e);
+    // Tetap balikin ENV tokens agar FE tidak 502/blank
+    return NextResponse.json({ tokens: envTokens() }, { status: 200 });
+  } finally {
+    clearTimeout(t);
   }
 }

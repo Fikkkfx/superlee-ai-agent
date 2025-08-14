@@ -6,6 +6,23 @@ export type TokenEntry = {
   aliases?: string[];
 };
 
+export async function getQuote({ tokenIn, tokenOut, amountInRaw, slippagePct }: {
+  tokenIn: string; tokenOut: string; amountInRaw: string; slippagePct?: number;
+}) {
+  const params = new URLSearchParams({
+    tokenIn, tokenOut, amount: amountInRaw, type: "exactInput",
+  });
+  // slippage kalau perlu kamu kirim juga → server bisa ikut hitung minOut
+  if (slippagePct != null) params.set("slippage", String(slippagePct));
+
+  const res = await fetch(`/api/storyhunt/quote?${params.toString()}`, { cache: "no-store" });
+  const j = await res.json();
+  if (!res.ok || j?.error) {
+    throw new Error(j?.message || "Failed to fetch quote");
+  }
+  return j;
+}
+
 const isAddr = (s: string): s is `0x${string}` => /^0x[0-9a-fA-F]{40}$/.test(s);
 const env = (k: string) => (process.env[k] || "").trim();
 

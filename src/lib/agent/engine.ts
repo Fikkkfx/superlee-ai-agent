@@ -25,8 +25,7 @@ function ask(msg: string): Ask {
 
 /**
  * Parse prompt user → intent swap.
- * Async karena perlu load registry PiperX sekali (cache 5 menit),
- * tapi resolver token-nya sendiri sinkron.
+ * Async karena resolve simbol via PiperX registry.
  */
 export async function decide(text: string): Promise<Ask | PlanOK> {
   const t = text.trim();
@@ -46,18 +45,22 @@ export async function decide(text: string): Promise<Ask | PlanOK> {
     return ask("Jumlah swap tidak valid.");
   }
 
-  // Muat & cache registry PiperX (dari /api/piperx_tokens + fallback ENV)
+  // Pastikan registry PiperX ter-load (cached 5 menit)
   await readyTokens();
 
-  // Resolve simbol/alias → address (atau langsung address)
-  const aIn = findTokenAddress(inSym);
+  // ✅ WAJIB await: hasilnya Promise<`0x${string}` | null>
+  const aIn = await findTokenAddress(inSym);
   if (!aIn) return ask(`Token input "${inSym}" tidak dikenali.`);
 
-  const aOut = findTokenAddress(outSym);
+  const aOut = await findTokenAddress(outSym);
   if (!aOut) return ask(`Token output "${outSym}" tidak dikenali.`);
 
-  const sIn = symbolFor(aIn);
-  const sOut = symbolFor(aOut);
+  // (optional) bind ke variabel ber-type jelas
+  const tokenIn = aIn as `0x${string}`;
+  const tokenOut = aOut as `0x${string}`;
+
+  // symbolFor juga async sekarang
+  const [sIn, sOut] = await Promise.all([symbolFor(tokenIn), symbolFor(tokenOut)]);
 
   const plan = [
     `Parse: ${amount} ${sIn} → ${sOut}${
@@ -72,8 +75,8 @@ export async function decide(text: string): Promise<Ask | PlanOK> {
   const intent: SwapIntent = {
     kind: "swap",
     amount,
-    tokenIn: aIn,
-    tokenOut: aOut,
+    tokenIn,
+    tokenOut,
     slippagePct: isFinite(slippage) ? slippage : 0.5,
   };
 

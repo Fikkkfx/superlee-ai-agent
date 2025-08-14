@@ -101,25 +101,18 @@ type TxClient = {
 type Msg = { role: "you" | "agent"; text: string; ts: number };
 
 /* ---------- helpers tambahan (SPG & error) ---------- */
-const PLACEHOLDER_SPG =
-  "0xc32A8a0FF3beDDDa58393d022aF433e78739FAbc".toLowerCase();
+const PLACEHOLDER_SPG = "0xc32A8a0FF3beDDDa58393d022aF433e78739FAbc".toLowerCase();
 
 function isHexAddress(a: string): a is `0x${string}` {
   return /^0x[0-9a-fA-F]{40}$/.test(a);
 }
-
-/** Ambil SPG dari env: trim + valid hex. (Tidak memblok meski sama dengan placeholder.) */
 function getEnvSpg(): `0x${string}` | null {
   const raw = (process.env.NEXT_PUBLIC_SPG_COLLECTION ?? "").trim();
-  if (!raw) return null;
-  if (!isHexAddress(raw)) return null;
-  return raw as `0x${string}`;
+  return isHexAddress(raw) ? (raw as `0x${string}`) : null;
 }
-
 function mask(addr: string) {
   return addr.slice(0, 6) + "…" + addr.slice(-4);
 }
-
 function prettyErr(e: any): string {
   const msgs: string[] = [];
   if (e?.shortMessage) msgs.push(e.shortMessage);
@@ -299,7 +292,7 @@ export default function PromptAgent() {
         return;
       }
       setPlan(d.plan);
-      setIntent(d.intent); // <- tidak perlu ts-expect-error
+      setIntent(d.intent);
       push(
         "agent",
         ["Plan:", ...d.plan.map((s: string, i: number) => `${i + 1}. ${s}`)].join(
@@ -347,6 +340,12 @@ export default function PromptAgent() {
 
     if (intent.kind === "swap") {
       try {
+        // pastikan di Aeneid untuk aggregator/route
+        if (!(await ensureAeneid())) {
+          push("agent", "❗ Gagal switch ke Aeneid (1315). Swap dibatalkan.");
+          return;
+        }
+
         const tokenIn = intent.tokenIn as `0x${string}`;
         const tokenOut = intent.tokenOut as `0x${string}`;
         const slippagePct: number = Number(intent.slippagePct ?? 0.5); // default 0.5%
@@ -436,21 +435,16 @@ Tx: ${tx.hash}
 
         // Ambil SPG dari env (valid hex). Jika null -> belum set / salah format.
         const spgAddr = getEnvSpg();
-        if (!spgAddr) {
+        if (!spgAddr || spgAddr.toLowerCase() === PLACEHOLDER_SPG) {
           push(
             "agent",
-            "❗ NEXT_PUBLIC_SPG_COLLECTION belum valid. Pastikan formatnya adalah alamat hex 42 karakter (0x + 40 hex) di .env.local, lalu restart dev server."
+            "❗ SPG collection belum diset (atau masih placeholder). Isi NEXT_PUBLIC_SPG_COLLECTION dengan koleksi SPG milikmu di Aeneid (1315), lalu restart / redeploy."
           );
           return;
         }
-
-        // Info ke user alamat yang dipakai (masking)
         push("agent", `Using SPG collection: ${mask(spgAddr)}`);
-        if (spgAddr.toLowerCase() === PLACEHOLDER_SPG) {
-          push("agent", "⚠️ This address appears to be a placeholder. Please continue as requested…");
-        }
 
-        // Pastikan chain
+        // Pastikan chain sebelum mulai upload/execute
         if (!(await ensureAeneid())) {
           push("agent", "❗ Gagal switch ke Aeneid (1315). Transaksi dibatalkan.");
           return;

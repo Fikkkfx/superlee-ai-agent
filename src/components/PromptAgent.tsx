@@ -9,26 +9,22 @@ import {
   usePublicClient,
 } from "wagmi";
 import { decide } from "@/lib/agent/engine";
-import {
-  getDecimals,
-  getQuote,
-  approveForAggregator,
-  swapViaAggregator,
-} from "@/lib/piperx";
 import { useStoryClient } from "@/lib/storyClient";
 import { storyAeneid } from "@/lib/chains/story";
 import { Paperclip, Check, X, Send } from "lucide-react";
 import {
-  parseUnits,
   toHex,
   keccak256,
   type Hex,
   createPublicClient,
   http,
 } from "viem";
-import { formatUnits } from "viem";
-import { previewSwap, ensureSufficientBalance, approveIfNeeded, executeSwap } from "@/lib/swapper";
-import { symbolFor } from "@/lib/agent/tokens";
+import {
+  previewSwap,
+  ensureSufficientBalance,
+  approveIfNeeded,
+  executeSwap,
+} from "@/lib/swapper";
 
 /* ---------- utils (hash, ipfs, fetch) ---------- */
 function bytesKeccak(data: Uint8Array): `0x${string}` {
@@ -61,7 +57,10 @@ async function fetchJSON(input: RequestInfo | URL, init?: RequestInit) {
   const t = await r.text();
   if (!r.ok)
     throw new Error(
-      `HTTP ${r.status}${r.statusText ? " " + r.statusText : ""}: ${t.slice(0, 200)}`
+      `HTTP ${r.status}${r.statusText ? " " + r.statusText : ""}: ${t.slice(
+        0,
+        200
+      )}`
     );
   try {
     return JSON.parse(t);
@@ -73,7 +72,8 @@ async function compressImage(
   file: File,
   o: { maxDim?: number; quality?: number; targetMaxBytes?: number } = {}
 ) {
-  const { maxDim = 1600, quality = 0.85, targetMaxBytes = 3.5 * 1024 * 1024 } = o;
+  const { maxDim = 1600, quality = 0.85, targetMaxBytes = 3.5 * 1024 * 1024 } =
+    o;
   if (file.size <= targetMaxBytes) return file;
   const bmp = await createImageBitmap(file);
   const s = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
@@ -85,9 +85,11 @@ async function compressImage(
   const blob: Blob = await new Promise((res) =>
     c.toBlob((b) => res(b as Blob), "image/webp", quality)
   );
-  return new File([blob], (file.name.replace(/\.\w+$/, "") || "image") + ".webp", {
-    type: "image/webp",
-  });
+  return new File(
+    [blob],
+    (file.name.replace(/\.\w+$/, "") || "image") + ".webp",
+    { type: "image/webp" }
+  );
 }
 
 /** Minimal client untuk menunggu konfirmasi tx */
@@ -276,7 +278,7 @@ export default function PromptAgent() {
   );
 
   /* actions */
-  function onRun() {
+  async function onRun() {
     const p = prompt.trim();
     if (!p) return;
 
@@ -287,22 +289,26 @@ export default function PromptAgent() {
     setPrompt("");
     if (taRef.current) taRef.current.style.height = "40px";
 
-    const d = decide(p);
-    if (d.type === "ask") {
-      setPlan(null);
-      setIntent(null);
-      push("agent", d.question);
-      setStatus(d.question);
-      return;
+    try {
+      const d = await decide(p); // async
+      if (d.type === "ask") {
+        setPlan(null);
+        setIntent(null);
+        push("agent", d.question);
+        setStatus(d.question);
+        return;
+      }
+      setPlan(d.plan);
+      setIntent(d.intent); // <- tidak perlu ts-expect-error
+      push(
+        "agent",
+        ["Plan:", ...d.plan.map((s: string, i: number) => `${i + 1}. ${s}`)].join(
+          "\n"
+        )
+      );
+    } catch (e: any) {
+      push("agent", `Gagal memproses prompt: ${e?.message || String(e)}`);
     }
-    setPlan(d.plan);
-    setIntent(d.intent);
-    push(
-      "agent",
-      ["Plan:", ...d.plan.map((s: string, i: number) => `${i + 1}. ${s}`)].join(
-        "\n"
-      )
-    );
   }
 
   async function awaitConfirmOnStory(hash: Hex): Promise<boolean> {
@@ -340,85 +346,85 @@ export default function PromptAgent() {
     setPlan(null);
 
     if (intent.kind === "swap") {
-  try {
-    const tokenIn = intent.tokenIn as `0x${string}`;
-    const tokenOut = intent.tokenOut as `0x${string}`;
-    const slippagePct: number = Number(intent.slippagePct ?? 0.5); // default 0.5%
-    const amountHuman = String(intent.amount);
+      try {
+        const tokenIn = intent.tokenIn as `0x${string}`;
+        const tokenOut = intent.tokenOut as `0x${string}`;
+        const slippagePct: number = Number(intent.slippagePct ?? 0.5); // default 0.5%
+        const amountHuman = String(intent.amount);
 
-    if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
-      push("agent", "Swap error: token in/out tidak boleh sama.");
-      return;
-    }
+        if (tokenIn.toLowerCase() === tokenOut.toLowerCase()) {
+          push("agent", "Swap error: token in/out tidak boleh sama.");
+          return;
+        }
 
-    showStatus("Preparing quote…");
-    const pv = await previewSwap({
-      tokenIn,
-      tokenOut,
-      amount: amountHuman,
-      slippagePct,
-    });
+        showStatus("Preparing quote…");
+        const pv = await previewSwap({
+          tokenIn,
+          tokenOut,
+          amount: amountHuman,
+          slippagePct,
+        });
 
-    // pastikan balance cukup (native / ERC20)
-    const pcAny: any = storyPc ?? getTxClient(); // pakai public client yg sudah ada
-    await ensureSufficientBalance({
-      publicClient: pcAny,
-      owner: address as `0x${string}`,
-      token: tokenIn,
-      amountRaw: pv.amountInRaw,
-    });
+        // pastikan balance cukup (native / ERC20)
+        const pcAny: any = storyPc ?? getTxClient();
+        await ensureSufficientBalance({
+          publicClient: pcAny,
+          owner: address as `0x${string}`,
+          token: tokenIn,
+          amountRaw: pv.amountInRaw,
+        });
 
-    // summary sebelum eksekusi
-    push(
-      "agent",
-      [
-        "Quote ✅",
-        `Amount In: ${amountHuman}`,
-        `Expected Out: ${pv.amountOutFormatted}`,
-        `Min Out (@${slippagePct}%): ${pv.minAmountOutFormatted}`,
-      ].join("\n")
-    );
+        // summary sebelum eksekusi
+        push(
+          "agent",
+          [
+            "Quote ✅",
+            `Amount In: ${amountHuman}`,
+            `Expected Out: ${pv.amountOutFormatted}`,
+            `Min Out (@${slippagePct}%): ${pv.minAmountOutFormatted}`,
+          ].join("\n")
+        );
 
-    showStatus("Approving token (if needed) …");
-    await approveIfNeeded({
-      publicClient: pcAny,
-      owner: address as `0x${string}`,
-      token: tokenIn,
-      amountRaw: pv.amountInRaw,
-      spender: pv.spender,
-    });
+        showStatus("Approving token (if needed) …");
+        await approveIfNeeded({
+          publicClient: pcAny,
+          owner: address as `0x${string}`,
+          token: tokenIn,
+          amountRaw: pv.amountInRaw,
+          spender: pv.spender,
+        });
 
-    showStatus("Submitting swap…");
-    const tx = await executeSwap(pv.route);
+        showStatus("Submitting swap…");
+        const tx = await executeSwap(pv.route);
 
-    push(
-      "agent",
-      `Swap submitted ⏳
+        push(
+          "agent",
+          `Swap submitted ⏳
 Tx: ${tx.hash}
 ↗ View: ${explorerBase}/tx/${tx.hash}`
-    );
+        );
 
-    // tunggu konfirmasi seperti sebelumnya
-    const ok = await awaitConfirmOnStory(tx.hash as Hex);
-    if (ok) {
-      push(
-        "agent",
-        `Swap success ✅
+        // tunggu konfirmasi seperti sebelumnya
+        const ok = await awaitConfirmOnStory(tx.hash as Hex);
+        if (ok) {
+          push(
+            "agent",
+            `Swap success ✅
 Min received (est): ${pv.minAmountOutFormatted}
 Tx: ${tx.hash}
 ↗ View: ${explorerBase}/tx/${tx.hash}`
-      );
-      setToast("Swap success ✅");
-      clearPlan();
-    } else {
-      showStatus("Tx masih pending di jaringan. Pantau link explorer di atas.");
+          );
+          setToast("Swap success ✅");
+          clearPlan();
+        } else {
+          showStatus("Tx masih pending di jaringan. Pantau link explorer di atas.");
+        }
+      } catch (e: any) {
+        push("agent", `Swap error: ${prettyErr(e)}`);
+        setToast("Swap error ❌");
+      }
+      return;
     }
-  } catch (e: any) {
-    push("agent", `Swap error: ${prettyErr(e)}`);
-    setToast("Swap error ❌");
-  }
-  return;
-}
 
     if (intent.kind === "register") {
       try {

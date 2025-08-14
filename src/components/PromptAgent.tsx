@@ -28,7 +28,7 @@ import {
 } from "viem";
 import { formatUnits } from "viem";
 import { previewSwap, ensureSufficientBalance, approveIfNeeded, executeSwap } from "@/lib/swapper";
-import { resolveToken, symbolFor } from "@/lib/agent/tokens";
+import { symbolFor } from "@/lib/agent/tokens";
 
 /* ---------- utils (hash, ipfs, fetch) ---------- */
 function bytesKeccak(data: Uint8Array): `0x${string}` {

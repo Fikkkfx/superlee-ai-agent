@@ -5,7 +5,7 @@ import { formatUnits, createPublicClient, http } from "viem";
 import { storyAeneid } from "@/lib/chains/story";
 import { erc20Abi } from "@/lib/abi/erc20";
 import { erc721Abi } from "@/lib/abi/erc721";
-import { WIP } from "@/lib/piperx";
+import { WIP } from "@/lib/storyhunt";
 
 const SPG_COLLECTION =
   (process.env.NEXT_PUBLIC_SPG_COLLECTION as `0x${string}`) ||

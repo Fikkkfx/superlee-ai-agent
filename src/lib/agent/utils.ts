@@ -1,7 +1,10 @@
 const KNOWN = {
-  WIP: (process.env.NEXT_PUBLIC_PIPERX_WIP || "0x1514000000000000000000000000000000000000") as `0x${string}`,
+  WIP: (process.env.NEXT_PUBLIC_STORYHUNT_WIP || "0x1514000000000000000000000000000000000000") as `0x${string}`,
   USDC: "", USDT: "",
 };
+
+const STORYHUNT_API = process.env.NEXT_PUBLIC_STORYHUNT_API!; // kalau kamu pakai base URL
+export const TOKENS_URL = "/api/storyhunt/tokens";
 
 export function resolveToken(t?: string): string | null {
   if (!t) return null;

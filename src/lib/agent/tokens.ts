@@ -3,21 +3,21 @@ export type TokenEntry = {
   symbol: string;
   address: `0x${string}`;
   decimals?: number | null;
-  aliases?: string[]; // lowercase
+  aliases?: string[];
 };
 
 const isAddr = (s: string): s is `0x${string}` => /^0x[0-9a-fA-F]{40}$/.test(s);
 const env = (k: string) => (process.env[k] || "").trim();
 
-// ===== ENV fallback (opsional, supaya tetap jalan kalau API down) =====
+// ===== ENV fallback (agar tetap jalan saat API down) =====
 const ENV_TOKENS: TokenEntry[] = [];
 {
-  const wip = env("NEXT_PUBLIC_PIPERX_WIP");
+  const wip = env("NEXT_PUBLIC_STORYHUNT_WIP") || env("NEXT_PUBLIC_PIPERX_WIP");
   if (isAddr(wip))
     ENV_TOKENS.push({
       symbol: "WIP",
       address: wip as `0x${string}`,
-      aliases: ["ip", "wip", "native"],
+      aliases: ["ip", "wip", "native", "wrapped ip"],
     });
 
   const usdc = env("NEXT_PUBLIC_TOKEN_USDC");
@@ -37,44 +37,45 @@ const ENV_TOKENS: TokenEntry[] = [];
     });
 }
 
-// ===== Cache dari API PiperX =====
+// ===== Cache dari API (StoryHunt default-list via /api/storyhunt/tokens) =====
 let loadedAt = 0;
-let mapBySymbol = new Map<string, TokenEntry>(); // key: lower symbol/alias
-let mapByAddr = new Map<string, TokenEntry>();   // key: lower address
+let mapBySymbol = new Map<string, TokenEntry>(); // key: symbol/alias (lower)
+let mapByAddr = new Map<string, TokenEntry>(); // key: address (lower)
 const TTL_MS = 5 * 60 * 1000;
 
 function indexToken(t: TokenEntry) {
   mapByAddr.set(t.address.toLowerCase(), t);
   mapBySymbol.set(t.symbol.toLowerCase(), t);
-  for (const a of t.aliases || []) mapBySymbol.set(a.toLowerCase(), t);
+  for (const a of t.aliases || []) {
+    mapBySymbol.set(String(a).toLowerCase(), t);
+  }
 }
 
+/** Muat token registry dari StoryHunt + ENV fallback. Cache 5 menit. */
 export async function loadPiperxRegistry(force = false) {
   if (!force && Date.now() - loadedAt < TTL_MS && mapByAddr.size > 0) return;
-
-  // reset + muat ENV dulu sebagai fallback
   mapByAddr = new Map();
   mapBySymbol = new Map();
+
+  // muat ENV dulu supaya tetap ada minimal set
   for (const t of ENV_TOKENS) indexToken(t);
 
   try {
-    // ✅ path benar ke API route Next.js kita
-    const r = await fetch("/api/piperx_tokens", { cache: "no-store" });
+    const r = await fetch("/api/storyhunt/tokens", { cache: "no-store" });
     if (r.ok) {
       const j = await r.json();
       const arr: TokenEntry[] = Array.isArray(j.tokens) ? j.tokens : [];
       for (const t of arr) {
-        const entry: TokenEntry = {
+        indexToken({
           symbol: String(t.symbol || "").toUpperCase(),
-          address: String(t.address || "").toLowerCase() as `0x${string}`,
+          address: t.address as `0x${string}`,
           decimals: t.decimals ?? null,
           aliases: (t.aliases || []).map((x: string) => String(x).toLowerCase()),
-        };
-        if (isAddr(entry.address) && entry.symbol) indexToken(entry);
+        });
       }
     }
   } catch {
-    // diam: tetap pakai ENV kalau API error
+    // ignore: tetap pakai ENV saja
   }
 
   loadedAt = Date.now();
@@ -84,9 +85,7 @@ export async function readyTokens() {
   await loadPiperxRegistry(false);
 }
 
-/** Resolve input (simbol/alias/alamat) -> address (0x...) */
-export async function findTokenAddress(input: string): Promise<`0x${string}` | null> {
-  await readyTokens();
+export function findTokenAddress(input: string): `0x${string}` | null {
   const s = (input || "").trim();
   if (!s) return null;
   if (isAddr(s)) return s as `0x${string}`;
@@ -94,9 +93,7 @@ export async function findTokenAddress(input: string): Promise<`0x${string}` | n
   return hit ? hit.address : null;
 }
 
-/** Balik: addr -> SYMBOL (uppercase), fallback: alamat apa adanya */
-export async function symbolFor(address: string): Promise<string> {
-  await readyTokens();
+export function symbolFor(address: string): string {
   const t = mapByAddr.get(address.toLowerCase());
   return t?.symbol || address;
 }

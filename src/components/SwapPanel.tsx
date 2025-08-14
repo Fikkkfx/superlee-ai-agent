@@ -2,7 +2,7 @@
 import { useAccount } from "wagmi";
 import { useState } from "react";
 import { parseUnits } from "viem";
-import { getDecimals, getQuote, approveForAggregator, swapViaAggregator, WIP } from "@/lib/piperx";
+import { getDecimals, getQuote, approveForAggregator, swapViaAggregator, WIP } from "@/lib/storyhunt";
 
 export default function SwapPanel() {
   const { isConnected } = useAccount();

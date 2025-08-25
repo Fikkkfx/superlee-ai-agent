@@ -7,7 +7,7 @@ import Topbar from "@/components/Topbar";
 
 export const metadata: Metadata = {
   title: "Superlee AI Agent",
-  description: "Swap via PiperX + Register IP on Story",
+  description: "Register IP on Story",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#f7fafc" },
     { media: "(prefers-color-scheme: dark)", color: "#0b0f1a" },

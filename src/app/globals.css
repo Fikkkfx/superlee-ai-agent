@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ====== THEME VARS ====== */
+/* Default: LIGHT */
+:root {
+  --ai-bg: #f7fafc;
+  --ai-fg: #0b1220;
+  --ai-card: rgba(0,0,0,0.04);
+  --ai-border: rgba(0,0,0,0.12);
+}
+
+/* DARK overrides (aktif saat <html class="dark">) */
+.dark {
+  --ai-bg: #0b0f1a;
+  --ai-fg: #e5f0ff;
+  --ai-card: rgba(255,255,255,0.06);
+  --ai-border: rgba(255,255,255,0.12);
+}
+
+/* === Transparent page scrollbars (outer) === */
+html, body {
+  overflow-y: auto;
+  overflow-x: hidden;            /* cegah scrollbar horizontal global */
+  scrollbar-width: thin;         /* Firefox */
+  scrollbar-color: transparent transparent;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;       /* WebKit */
+}
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Hide scrollbar but keep scroll */
+.scrollbar-invisible {
+  -ms-overflow-style: none;      /* IE/Edge */
+  scrollbar-width: none;         /* Firefox */
+}
+.scrollbar-invisible::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* gradient biru-cyan lembut (opsional, untuk body) */
+.bg-ai {
+  background:
+    radial-gradient(60% 60% at 20% 0%, rgba(56,189,248,.14), transparent),
+    radial-gradient(40% 60% at 80% 20%, rgba(14,165,233,.10), transparent);
+}
+
+/* ====== COMPONENT PRIMITIVES ====== */
+.card {
+  @apply rounded-2xl p-5 shadow-glow backdrop-blur;
+  border: 1px solid var(--ai-border);
+  background: var(--ai-card);
+}
+
+/* Hide/Invisible scrollbar — satu versi saja */
+.scrollbar-invisible {
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* IE/Edge legacy */
+}
+.scrollbar-invisible::-webkit-scrollbar {
+  width: 0;
+  height: 0;                    /* Chrome/Safari */
+}
+
+/* Pixel-art tetap tajam */
+.pixelated { image-rendering: pixelated; image-rendering: crisp-edges; }
+
+/* ====== ANIMATIONS ====== */
+@keyframes kenburns { 0%{transform:scale(1)} 100%{transform:scale(1.08) translate3d(-1%,-1%,0)} }
+@keyframes floatY   { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+.animate-kenburns { animation: kenburns 28s ease-in-out infinite alternate; }
+.animate-float    { animation: floatY 7.5s ease-in-out infinite; }
+
+/* Grid overlay anim (match dengan tailwind keyframes/animation yang kamu set) */
+.ai-grid {
+  background-image:
+    linear-gradient(transparent 0 0),
+    linear-gradient(transparent 0 0),
+    linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 60px 60px, 60px 60px;
+  background-position: 0 0, 0 0, 0 0, 0 0;
+  animation: grid 30s linear infinite;
+}
+
+/* ====== BG LAYERS ====== */
+.hero-layer { position:absolute; inset:0; overflow:hidden; pointer-events:none; z-index:0; }
+.hero-vignette{
+  position:absolute; inset:0;
+  background:
+    radial-gradient(60% 50% at 70% 35%, rgba(11,15,26,0) 0%, rgba(11,15,26,.25) 70%, rgba(11,15,26,.5) 100%),
+    linear-gradient(180deg, rgba(11,15,26,.35) 0%, rgba(11,15,26,.15) 35%, rgba(11,15,26,.45) 100%);
+}
+
+/* --- Chat bubble content: wrap agresif utk hash/addr panjang --- */
+.msg-pre {
+  white-space: pre-wrap;          /* hormati newline */
+  overflow-wrap: anywhere;        /* paksa pecah di mana saja */
+  word-break: break-word;         /* fallback */
+}
